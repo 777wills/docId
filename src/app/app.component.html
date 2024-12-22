@@ -1,0 +1,49 @@
+<div class="flex justify-center items-center h-screen bg-gray-100 dark:bg-gray-800">
+  <!-- Contenedor principal -->
+  <div class="bg-white dark:bg-gray-900 p-8 rounded-lg shadow-md w-full max-w-md relative">
+    <h1 class="text-center text-xl font-bold mb-4 text-gray-800 dark:text-gray-200">
+      Captura tu Documento de Identidad
+    </h1>
+
+    <!-- Contenedor del video y canvas -->
+    <div
+      id="cameraContainer"
+      class="relative bg-gray-200 dark:bg-gray-700 rounded-lg border-2 border-dashed border-gray-400 dark:border-grey-600"
+      style="width: 384px; height: 272px;"
+    >
+      <!-- Video -->
+      <video
+        #videoElement
+        autoplay
+        playsinline
+        class="absolute inset-0 w-full h-full rounded-lg object-cover"
+      ></video>
+
+      <!-- Canvas para bordes detectados -->
+      <canvas
+        id="edgesCanvas"
+        class="absolute inset-0 w-full h-full rounded-lg object-cover hidden"
+      ></canvas>
+
+      <!-- Canvas para el contorno final -->
+      <canvas
+        id="contourCanvas"
+        class="absolute inset-0 w-full h-full rounded-lg object-cover hidden"
+      ></canvas>
+
+      <!-- Mensaje inicial sobre el recuadro -->
+      <p class="absolute inset-0 flex justify-center items-center text-gray-500 dark:text-gray-400 text-center">
+        Coloca tu documento dentro del recuadro
+      </p>
+    </div>
+  </div>
+
+  <!-- Mensaje de retroalimentación -->
+  <div
+    id="feedbackMessage"
+    class="absolute top-0 left-0 right-0 text-center bg-red-500 text-white py-2 rounded-lg shadow-md"
+    style="display: none;"
+  >
+    Mensaje de retroalimentación aquí
+  </div>
+</div>
