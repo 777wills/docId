@@ -23,12 +23,14 @@ export class AppComponent implements OnInit {
   containerWidth = 384;
   containerHeight = 272;
 
-  // Ajusta estos valores para mayor precisión
-  minFocusThreshold = 180;   // Umbral de nitidez (sube si quieres más precisión, p.ej. 180-200)
-  minAreaFraction = 0.6;     // 60% del contenedor
-  maxAreaFraction = 0.9;     // 90% del contenedor
-  minAspectRatio = 1.4;      // Relación de aspecto mínima
-  maxAspectRatio = 1.7;      // Relación de aspecto máxima
+  // Ajustes de detección
+  // Se mantiene un threshold de nitidez mediano
+  minFocusThreshold = 120;
+  // Si te sigue fallando, puedes bajar minAreaFraction a 0.3
+  minAreaFraction = 0.3;
+  maxAreaFraction = 0.9;
+  minAspectRatio = 1.0;
+  maxAspectRatio = 4.0;
 
   // Estabilización
   previousRect: any | null = null;
@@ -47,10 +49,12 @@ export class AppComponent implements OnInit {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
+          facingMode: { ideal: 'environment' }, // Forzar cámara trasera
           width: { ideal: 384 },
           height: { ideal: 272 },
         },
       });
+
       this.video.srcObject = stream;
       await this.video.play();
 
@@ -58,18 +62,10 @@ export class AppComponent implements OnInit {
       this.scaleX = this.video.videoWidth / this.containerWidth;
       this.scaleY = this.video.videoHeight / this.containerHeight;
 
-      console.log(
-        'Dimensiones reales de la cámara:',
-        this.video.videoWidth,
-        this.video.videoHeight
-      );
-      console.log('Escala (X, Y):', this.scaleX, this.scaleY);
-
-      // Inicia el bucle de detección
       this.startDetectionLoop();
     } catch (error) {
-      console.error('Error al iniciar la cámara:', error);
       this.showFeedback('Error al acceder a la cámara. Verifica permisos.');
+      console.error('Error al iniciar la cámara:', error);
     }
   }
 
@@ -91,7 +87,7 @@ export class AppComponent implements OnInit {
   }
 
   /**
-   * Captura el fotograma actual del <video> y lo convierte a un cv.Mat para OpenCV.
+   * Captura el fotograma actual del <video> y lo convierte a un cv.Mat.
    */
   captureFrame(): any | null {
     const canvas = document.createElement('canvas');
@@ -108,125 +104,129 @@ export class AppComponent implements OnInit {
 
   /**
    * Procesa el fotograma para verificar:
-   * 1) Nitidez >= minFocusThreshold
-   * 2) Documento completamente dentro [0,0,384,272]
-   * 3) Ocupa entre minAreaFraction y maxAreaFraction del área
-   * 4) Relación de aspecto dentro del rango [minAspectRatio, maxAspectRatio]
-   * 5) Cuatro lados (aproxPolyDP)
+   * - Nitidez
+   * - Documento dentro del contenedor y con 4 vértices
+   * - Área suficiente y relación de aspecto
    */
   processFrame(frame: any) {
     // 1. Convertir a escala de grises
     const gray = new cv.Mat();
     cv.cvtColor(frame, gray, cv.COLOR_RGBA2GRAY);
 
-    // 2. Verificar nitidez (Laplace)
+    // 2. Verificar nitidez
     const sharpnessValue = this.measureSharpness(gray);
-    console.log('Nitidez:', sharpnessValue);
+    this.showSharpness(sharpnessValue);
 
     if (sharpnessValue < this.minFocusThreshold) {
-      this.showFeedback(
-        'La imagen está borrosa. Ajusta la posición/cámara para enfocar.'
-      );
+      this.showFeedback('La imagen está borrosa. Nitidez: ' + sharpnessValue.toFixed(2));
+      // Liberar
       frame.delete();
       gray.delete();
       return;
     }
 
-    // 3. Preprocesado para contornos
-    //    - Suavizado
+    // 3. Preprocesado para contornos: Suavizado, Canny, Cierre morfológico
     const blurred = new cv.Mat();
     cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
 
-    //    - Canny
     const edges = new cv.Mat();
     cv.Canny(blurred, edges, 50, 150);
 
-    //    - Cierre morfológico para unir bordes “rotos”
     const kernel = cv.Mat.ones(3, 3, cv.CV_8U);
     cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, kernel);
 
-    // 4. Detección de contornos
+    // 4. Buscar contornos
     const contours = new cv.MatVector();
     const hierarchy = new cv.Mat();
-    cv.findContours(
-      edges,
-      contours,
-      hierarchy,
-      cv.RETR_EXTERNAL,
-      cv.CHAIN_APPROX_SIMPLE
-    );
+    cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
     let largestRect: any | null = null;
     let maxArea = 0;
 
+    // Mensaje auxiliar para cada contorno
+    let debugInfo = '';
+
     for (let i = 0; i < contours.size(); i++) {
       const contour = contours.get(i);
-
-      // 4.1 Aproximar el contorno a polígonos
       const approx = new cv.Mat();
       const perimeter = cv.arcLength(contour, true);
       cv.approxPolyDP(contour, approx, 0.02 * perimeter, true);
 
-      // Verificamos si es un polígono de 4 vértices (posible rectángulo).
-      if (approx.size().height === 4 && cv.isContourConvex(approx)) {
-        // boundingRect del polígono aproximado
+      // ¿Tiene 4 vértices?
+      const vertices = approx.size().height;
+      if (vertices === 4 && cv.isContourConvex(approx)) {
         const rect = cv.boundingRect(approx);
 
-        // Escalar coordenadas al espacio del contenedor
+        // Escalar coords a nuestro contenedor
         const scaledX = rect.x / this.scaleX;
         const scaledY = rect.y / this.scaleY;
-        const scaledWidth = rect.width / this.scaleX;
-        const scaledHeight = rect.height / this.scaleY;
+        const scaledW = rect.width / this.scaleX;
+        const scaledH = rect.height / this.scaleY;
+        const scaledX2 = scaledX + scaledW;
+        const scaledY2 = scaledY + scaledH;
 
-        // Verificar si está COMPLETAMENTE dentro del recuadro 0..384, 0..272
-        const isInsideContainer =
+        // ¿Está dentro de [0,0, 384, 272]?
+        const isInside =
           scaledX >= 0 &&
           scaledY >= 0 &&
-          scaledX + scaledWidth <= this.containerWidth &&
-          scaledY + scaledHeight <= this.containerHeight;
+          scaledX2 <= this.containerWidth &&
+          scaledY2 <= this.containerHeight;
 
-        if (!isInsideContainer) {
-          // console.log('Contorno descartado: fuera del recuadro.');
-          approx.delete();
-          continue;
-        }
-
-        // Calcular área y relación de aspecto
-        const rectArea = scaledWidth * scaledHeight;
+        // Calcular área
+        const rectArea = scaledW * scaledH;
         const areaRatio = rectArea / (this.containerWidth * this.containerHeight);
-        const aspectRatio = scaledWidth / scaledHeight;
+        const aspectRatio = scaledW / scaledH;
 
-        // Validar área y relación de aspecto
-        if (
-          areaRatio >= this.minAreaFraction &&
-          areaRatio <= this.maxAreaFraction &&
-          aspectRatio >= this.minAspectRatio &&
-          aspectRatio <= this.maxAspectRatio &&
-          rectArea > maxArea
+        // Construir info de debug
+        debugInfo += `Contorno ${i}: 4 vértices,
+          scaledX=${scaledX.toFixed(2)}, scaledY=${scaledY.toFixed(2)},
+          w=${scaledW.toFixed(2)}, h=${scaledH.toFixed(2)},
+          areaRatio=${areaRatio.toFixed(2)}, aspectRatio=${aspectRatio.toFixed(2)},
+          inside=${isInside}.\n`;
+
+        // Validar si cumple todo
+        if (!isInside) {
+          debugInfo += `--> Descartado: fuera del contenedor.\n`;
+        } else if (
+          areaRatio < this.minAreaFraction ||
+          areaRatio > this.maxAreaFraction
         ) {
-          largestRect = {
-            x: scaledX,
-            y: scaledY,
-            width: scaledWidth,
-            height: scaledHeight,
-          };
-          maxArea = rectArea;
+          debugInfo += `--> Descartado: areaRatio fuera de [${this.minAreaFraction}, ${this.maxAreaFraction}].\n`;
+        } else if (
+          aspectRatio < this.minAspectRatio ||
+          aspectRatio > this.maxAspectRatio
+        ) {
+          debugInfo += `--> Descartado: aspectRatio fuera de [${this.minAspectRatio}, ${this.maxAspectRatio}].\n`;
+        } else {
+          // TODO: Si llega aquí, es un contorno válido
+          if (rectArea > maxArea) {
+            largestRect = {
+              x: scaledX,
+              y: scaledY,
+              width: scaledW,
+              height: scaledH,
+            };
+            maxArea = rectArea;
+          }
         }
-
-        approx.delete();
+      } else {
+        debugInfo += `Contorno ${i}: ${vertices} vértices. Descartado.\n`;
       }
+
+      approx.delete();
     }
+
+    // Mostrar debug de contornos en pantalla
+    this.showDebugInfo(debugInfo);
 
     if (largestRect) {
       this.hideFeedback();
       this.stabilizeDetection(largestRect);
     } else {
-      this.showFeedback(
-        'Debe verse el documento completo, ocupando el espacio y con el tamaño correcto.'
-      );
+      this.showFeedback('Ningún contorno válido. Revisa el debug.');
     }
 
-    // Liberar memoria intermedia
+    // Liberar memoria
     frame.delete();
     gray.delete();
     blurred.delete();
@@ -237,7 +237,7 @@ export class AppComponent implements OnInit {
   }
 
   /**
-   * Calcula la varianza del Laplaciano (nitidez). A mayor valor, más nítida la imagen.
+   * Calcula la varianza del Laplaciano (nitidez).
    */
   measureSharpness(grayMat: any): number {
     const lap = new cv.Mat();
@@ -270,13 +270,9 @@ export class AppComponent implements OnInit {
 
   /**
    * Comprueba si el rect actual es similar al anterior.
-   * Si coincide varios frames seguidos, se considera estable.
    */
   stabilizeDetection(currentRect: any) {
-    if (
-      !this.previousRect ||
-      this.areRectsSimilar(this.previousRect, currentRect)
-    ) {
+    if (!this.previousRect || this.areRectsSimilar(this.previousRect, currentRect)) {
       this.consecutiveStableFrames++;
     } else {
       this.consecutiveStableFrames = 0;
@@ -285,18 +281,17 @@ export class AppComponent implements OnInit {
     this.previousRect = currentRect;
 
     if (this.consecutiveStableFrames >= this.stabilityThreshold) {
-      // Dibuja el rectángulo final, captura foto, y detén el bucle
+      // Captura final
       this.drawFinalRect(currentRect);
-      console.log('Detección estabilizada: Documento dentro, buen tamaño y nitidez.');
-
-      // Capturar foto
       this.capturePhoto();
 
-      // Detener setInterval
+      // Detener loop
       if (this.detectionTimer) {
         clearInterval(this.detectionTimer);
         this.detectionTimer = null;
       }
+
+      this.showDebugInfo('¡Documento capturado!');
     }
   }
 
@@ -315,27 +310,20 @@ export class AppComponent implements OnInit {
   }
 
   /**
-   * Dibuja un rectángulo verde en contourCanvas y muestra el documento.
+   * Dibuja un rectángulo verde en contourCanvas.
    */
   drawFinalRect(rect: any) {
-    const contourCanvas = document.getElementById(
-      'contourCanvas'
-    ) as HTMLCanvasElement;
+    const contourCanvas = document.getElementById('contourCanvas') as HTMLCanvasElement;
     contourCanvas.classList.remove('hidden');
     const ctx = contourCanvas.getContext('2d');
     if (!ctx) return;
 
-    // Ajustar canvas al tamaño del video
     contourCanvas.width = this.video.videoWidth;
     contourCanvas.height = this.video.videoHeight;
 
-    // Limpiar y dibujar el frame actual
     ctx.clearRect(0, 0, contourCanvas.width, contourCanvas.height);
     ctx.drawImage(this.video, 0, 0, contourCanvas.width, contourCanvas.height);
 
-    // Dibujar rectángulo
-    // Ojo: las coords del rect vienen “escaladas” al contenedor,
-    //      para dibujarlo en el canvas del video hay que reescalar de vuelta.
     ctx.strokeStyle = 'green';
     ctx.lineWidth = 4;
     ctx.strokeRect(
@@ -358,16 +346,13 @@ export class AppComponent implements OnInit {
 
     ctx.drawImage(this.video, 0, 0, canvas.width, canvas.height);
     const dataUrl = canvas.toDataURL('image/png');
-    console.log('Foto capturada en Base64:', dataUrl);
 
-    // Aquí podrías:
-    // - this.uploadImage(dataUrl);
-    // - localStorage.setItem('cedula', dataUrl);
-    // - etc.
+    // Muestra en debug
+    this.showDebugInfo('Foto capturada. Base64: ' + dataUrl.substring(0, 50) + '...');
   }
 
   /**
-   * Muestra un mensaje en el div #feedbackMessage
+   * Muestra un mensaje en el div #feedbackMessage.
    */
   showFeedback(msg: string) {
     const feedbackEl = document.getElementById('feedbackMessage');
@@ -378,12 +363,34 @@ export class AppComponent implements OnInit {
   }
 
   /**
-   * Oculta el mensaje de retroalimentación si existe
+   * Oculta el mensaje de retroalimentación si existe.
    */
   hideFeedback() {
     const feedbackEl = document.getElementById('feedbackMessage');
     if (feedbackEl) {
       feedbackEl.style.display = 'none';
+    }
+  }
+
+  /**
+   * Muestra la nitidez en un <div id="sharpnessMessage">.
+   */
+  showSharpness(value: number) {
+    const sharpnessEl = document.getElementById('sharpnessMessage');
+    if (sharpnessEl) {
+      sharpnessEl.style.display = 'block';
+      sharpnessEl.innerText = `Nitidez: ${value.toFixed(2)}`;
+    }
+  }
+
+  /**
+   * Muestra información extra de debug en <div id="debugInfo">.
+   */
+  showDebugInfo(info: string) {
+    const debugEl = document.getElementById('debugInfo');
+    if (debugEl) {
+      debugEl.style.whiteSpace = 'pre-wrap'; // Para que \n se vea como salto de línea
+      debugEl.innerText = info;
     }
   }
 }
