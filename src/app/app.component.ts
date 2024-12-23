@@ -1,7 +1,5 @@
 import { Component, OnInit } from '@angular/core';
 
-// Asegúrate de haber incluido el script de OpenCV (opencv.js) en tu index.html
-// <script async src="assets/opencv.js"></script>
 declare const cv: any;
 
 @Component({
@@ -10,10 +8,8 @@ declare const cv: any;
   styleUrls: ['./app.component.css'],
 })
 export class AppComponent implements OnInit {
-  // Referencias y variables
   video!: HTMLVideoElement;
   detectionTimer: any = null; // Control del setInterval
-  iterations = 0; // Contador para evitar loops infinitos
 
   // Escalado del video
   scaleX = 1; // Relación ancho: video real -> contenedor CSS
@@ -26,7 +22,7 @@ export class AppComponent implements OnInit {
   // Ajustes de detección
   // Se mantiene un threshold de nitidez mediano
   minFocusThreshold = 120;
-  // Si te sigue fallando, puedes bajar minAreaFraction a 0.3
+
   minAreaFraction = 0.3;
   maxAreaFraction = 0.9;
   minAspectRatio = 1.0;
@@ -70,18 +66,13 @@ export class AppComponent implements OnInit {
   }
 
   /**
-   * Ejecuta la detección cada 500 ms, hasta un máximo de 12000 iteraciones.
+   * Ejecuta la detección cada 500 ms.
    */
   startDetectionLoop() {
     this.detectionTimer = setInterval(() => {
-      this.iterations++;
-      if (this.iterations < 12000) {
-        const frame = this.captureFrame();
-        if (frame) {
-          this.processFrame(frame);
-        }
-      } else {
-        clearInterval(this.detectionTimer);
+      const frame = this.captureFrame();
+      if (frame) {
+        this.processFrame(frame);
       }
     }, 500);
   }
@@ -346,6 +337,8 @@ export class AppComponent implements OnInit {
 
     ctx.drawImage(this.video, 0, 0, canvas.width, canvas.height);
     const dataUrl = canvas.toDataURL('image/png');
+
+    console.log('Imagen capturada en Base64:', dataUrl);
 
     // Muestra en debug
     this.showDebugInfo('Foto capturada. Base64: ' + dataUrl.substring(0, 50) + '...');
